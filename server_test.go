@@ -3,16 +3,19 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
-func TestGetRequest(t *testing.T) {
-	testServer := httptest.NewServer(http.HandlerFunc(ProxyEndpoint))
-	defer testServer.Close()
+func TestHandleProxy(t *testing.T) {
+	router := gin.New()
+	router.Any("/proxy", handleProxy)
 
-	reqBody := RequestBody{ // client -> proxy
+	requestBody := RequestBody{
 		Method: "GET",
 		URL:    "https://google.com",
 		Headers: map[string]interface{}{
@@ -21,19 +24,18 @@ func TestGetRequest(t *testing.T) {
 			"User-Agent":     "Mozilla/5.0 (Win64; x64)",
 		},
 	}
+	requestBytes, _ := json.Marshal(requestBody)
 
-	jsonBody, _ := json.Marshal(reqBody)
+	request := httptest.NewRequest("POST", "/proxy", bytes.NewBuffer(requestBytes))
 
-	req, err := http.NewRequest(reqBody.Method, testServer.URL, bytes.NewReader(jsonBody)) // proxy -> service
-	if err != nil {
-		t.Error(err)
-		return
-	}
+	responseRecorder := httptest.NewRecorder()
+	router.ServeHTTP(responseRecorder, request)
 
-	res, err := http.DefaultClient.Do(req) // proxy <- service
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	defer res.Body.Close()
+	assert.Equal(t, http.StatusOK, responseRecorder.Code)
+
+	responseBody := &ResponseBody{}
+	err := json.Unmarshal(responseRecorder.Body.Bytes(), &responseBody)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, responseBody.StatusCode)
+	fmt.Println(responseBody)
 }

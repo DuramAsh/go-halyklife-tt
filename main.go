@@ -2,10 +2,10 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
+	"github.com/gin-gonic/gin"
 	"log"
-	"math/rand"
 	"net/http"
+	"os"
 )
 
 type RequestBody struct {
@@ -21,45 +21,65 @@ type ResponseBody struct {
 	Length     int64                  `json:"length"`
 }
 
-func ProxyEndpoint(w http.ResponseWriter, r *http.Request) {
-	reqFromClient := RequestBody{}
-	_ = json.NewDecoder(r.Body).Decode(&reqFromClient)                                 // get json body of the client's request to req var
-	reqToService, err := http.NewRequest(reqFromClient.Method, reqFromClient.URL, nil) // creating new request, based on the client's request
+func handleProxy(ctx *gin.Context) {
+	// Client -> Proxy
+	C2PRequestBody := &RequestBody{}
+	_ = ctx.BindJSON(&C2PRequestBody)
+	// Proxy -> Service
+	P2SRequest, err := http.NewRequest(C2PRequestBody.Method, C2PRequestBody.URL, ctx.Request.Body)
 	if err != nil {
-		log.Fatal("cannot create req from proxy to service", http.StatusBadRequest)
+		log.Fatal(err.Error())
 		return
 	}
 
-	for k, v := range reqFromClient.Headers { // setting all the headers from prev req to the new req
-		reqToService.Header.Set(k, fmt.Sprintf("%v", v))
-	}
-	client := &http.Client{}
-	serviceResponse, err := client.Do(reqToService)
+	// Proxy <- Service
+	client := http.Client{}
+	S2PResponse, err := client.Do(P2SRequest)
 	if err != nil {
-		log.Fatal("failed to send request to service", http.StatusBadRequest)
+		log.Fatal(err.Error())
 		return
 	}
-
-	resp := &ResponseBody{
-		ID:         uint(rand.Intn(100)),
-		StatusCode: serviceResponse.StatusCode,
-		Headers:    convertHeaders(serviceResponse.Header),
-		Length:     serviceResponse.ContentLength,
+	// Client <- Proxy
+	P2CResponseBody := &ResponseBody{
+		ID:         777,
+		StatusCode: S2PResponse.StatusCode,
+		Headers:    convertHeaders(S2PResponse.Header),
+		Length:     S2PResponse.ContentLength,
 	}
-	json.NewEncoder(w).Encode(resp)
+	ctx.JSON(P2CResponseBody.StatusCode, P2CResponseBody)
+	dumpData := make(map[string]interface{})
+	dumpData["request"] = C2PRequestBody
+	dumpData["response"] = P2CResponseBody
+	Dump2JSON("dump.json", dumpData)
 }
 
-func convertHeaders(header http.Header) map[string]interface{} {
-	headers := make(map[string]interface{})
-	for k, v := range header {
-		headers[k] = v
+func convertHeaders(headers http.Header) map[string]interface{} {
+	m := make(map[string]interface{})
+	for k, v := range headers {
+		m[k] = v
 	}
-	return headers
+	return m
+}
+
+func Dump2JSON(filename string, data map[string]interface{}) {
+	file, _ := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+	jsonData := make([]map[string]interface{}, 0)
+	decoder := json.NewDecoder(file)
+	_ = decoder.Decode(&jsonData)
+	file.Close()
+	os.Remove(filename)
+
+	file, _ = os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+	jsonData = append(jsonData, data)
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "    ")
+	_ = encoder.Encode(jsonData)
+	file.Close()
 }
 
 func main() {
-	server := http.Server{}
-	fmt.Println("Server is running...")
-	http.HandleFunc("/proxy", ProxyEndpoint)
-	_ = server.ListenAndServe()
+	router := gin.Default()
+	router.Any("/proxy", handleProxy)
+
+	_ = router.Run()
 }
